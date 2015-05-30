@@ -1,0 +1,14 @@
+archiver-user:
+    username: alidron-archiver
+    password: 7IXf77&kBHmf^cqUF&&O$nCqe
+    hostname: env['DB_PORT_8086_TCP_ADDR']
+    port: env['DB_PORT_8086_TCP_PORT']
+    db: alidron-test
+    scheme: influxdb
+
+admin-user:
+    username: root
+    password: root
+    hostname: env['DB_PORT_8086_TCP_ADDR']
+    port: env['DB_PORT_8086_TCP_PORT']
+    scheme: influxdb
