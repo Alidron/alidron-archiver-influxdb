@@ -176,18 +176,23 @@ class InfluxDBArchiver(object):
 
 
 def _config_parse_env(config):
-    for k,v in config.items():
-        m = re.match("env\['(.*)'\]", v)
-        if m:
-            config[k] = os.environ[m.group(1)]
+    if isinstance(config, list):
+        map(_config_parse_env, config)
+    else:
+        for k,v in config.items():
+            if isinstance(v, str) or isinstance(v, unicode):
+                m = re.match("env\['(.*)'\]", v)
+                if m:
+                    config[k] = os.environ[m.group(1)]
+            else:
+                _config_parse_env(v)
 
 
 if __name__ == '__main__':
     with open('config.yaml', 'r') as config_file:
         config = yaml.load(config_file)
 
-    _config_parse_env(config['archiver-user'])
-    _config_parse_env(config['admin-user'])
+    _config_parse_env(config)
 
     client = InfluxDBArchiver(config)
     client.serve_forever()
