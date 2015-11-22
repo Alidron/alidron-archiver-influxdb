@@ -1,6 +1,13 @@
 image_name = alidron/alidron-archiver-influxdb
+rpi_image_name = alidron/rpi-alidron-archiver-influxdb
+registry = neuron.local:6666
 
-.PHONY: clean clean-dangling build run-bash run
+container_name = al-arch-influx
+
+run_args = -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=8086 -v $(CURDIR):/workspace # --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac
+exec_args = python alidron-archiver.py
+
+.PHONY: clean clean-dangling build build-rpi push push-rpi pull pull-rpi run-bash run-bash-rpi run run-rpi
 
 clean:
 	docker rmi $(image_name) || true
@@ -11,8 +18,40 @@ clean-dangling:
 build: clean-dangling
 	docker build --force-rm=true -t $(image_name) .
 
+build-rpi: clean-dangling
+	docker build --force-rm=true -t $(rpi_image_name) -f Dockerfile-rpi .
+	docker tag -f $(rpi_image_name) $(registry)/$(rpi_image_name)
+
+push:
+	docker push $(registry)/$(image_name)
+
+push-rpi:
+	docker push $(registry)/$(rpi_image_name)
+
+pull:
+	docker pull $(registry)/$(image_name)
+	docker tag $(registry)/$(image_name) $(image_name)
+
+pull-rpi:
+	docker pull $(registry)/$(rpi_image_name)
+	docker tag $(registry)/$(rpi_image_name) $(rpi_image_name)
+
 run-bash:
-	docker run -it --rm --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac -v $(CURDIR):/workspace $(image_name) bash
+	docker run -it --rm --name=$(container_name) $(run_args) $(image_name) bash
+
+run-bash-rpi:
+	docker run -it --rm --name=$(container_name) $(run_args) $(rpi_image_name) bash
 
 run:
-	docker run -it --rm $(image_name) python -m isac_cmd hello
+	docker run -d --name=$(container_name) $(run_args) $(image_name) $(exec_args)
+
+run-rpi:
+	docker run -d --name=$(container_name) $(run_args) $(rpi_image_name) $(exec_args)
+
+stop:
+	docker stop $(container_name)
+	docker rm $(container_name)
+
+logs:
+	docker logs -f $(container_name)
+
