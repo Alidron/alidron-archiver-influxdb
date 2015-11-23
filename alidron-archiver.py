@@ -113,7 +113,7 @@ class InfluxDBArchiver(object):
         for meas_tags, fields in raw_data.items():
             value_name = meas_tags[0].encode()
             if value_name.startswith('metadata.'):
-                metadata[value_name[9:]] = json.loads(fields.next())
+                metadata[value_name[9:]] = fields.next()
 
         for meas_tags, fields in raw_data.items():
             value_name = meas_tags[0].encode()
