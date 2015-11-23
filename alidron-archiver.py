@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pickle
 import re
 import signal
 import sys
@@ -10,6 +11,7 @@ from datetime import datetime
 from functools import partial
 from math import floor
 from pprint import pprint as pp
+from requests.exceptions import ConnectionError
 
 #from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
 #from influxdb.influxdb08.client import InfluxDBClientError
@@ -122,7 +124,7 @@ class InfluxDBArchiver(object):
 
             print '##############', value_name, type(metadata.get(value_name, None)), metadata.get(value_name, None)
             last_point = fields.next()
-            
+
             try:
                 ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%S.%fZ')
             except ValueError:
@@ -169,7 +171,13 @@ class InfluxDBArchiver(object):
                 'fields': {'value': value},
             }]
         logger.info('Writing for %s: %s, %s, %s', name, ts_, ns, data)
-        self._client.write_points(data, time_precision='ms')
+
+        self._retry_send_buffer()
+        try:
+            self._client.write_points(data, time_precision='ms')
+        except ConnectionError as ex:
+            logger.error('Failed to write to DB, writing to buffer: %s', ex)
+            self._add_to_buffer(data)
 
     def _notify_metadata(self, name, metadata):
         if not isinstance(metadata, dict):
@@ -181,7 +189,43 @@ class InfluxDBArchiver(object):
             #'points': [[json.dumps(metadata)]],
         }]
         logger.info('Writing metadata for %s: %s', name, metadata)
-        self._client.write_points(data)
+
+        self._retry_send_buffer()
+        try:
+            self._client.write_points(data, time_precision='ms')
+        except ConnectionError as ex:
+            logger.error('Failed to write to DB, writing to buffer: %s', ex)
+            self._add_to_buffer(data)
+
+    def _add_to_buffer(self, data):
+        previous_data = []
+        if os.path.exists(config['buffer']['path']):
+            with open(config['buffer']['path'], 'r') as buffer_r:
+                previous_data += pickle.load(buffer_r)
+
+        with open(config['buffer']['path'], 'w') as buffer_w:
+            pickle.dump(previous_data + data, buffer_w, -1)
+
+        logger.info('One data point flushed to buffer')
+
+    def _retry_send_buffer(self):
+        if not os.path.exists(config['buffer']['path']):
+            return
+
+        with open(config['buffer']['path'], 'r') as buffer_r:
+            data = pickle.load(buffer_r)
+
+        if not data:
+            return
+
+        try:
+            self._client.write_points(data, time_precision='ms')
+        except ConnectionError:
+            logger.warning('Failed to write %d records from buffer, will retry later', len(data))
+            return
+
+        # Write succeeded, clear buffer
+        os.remove(config['buffer']['path'])
 
     def _sigterm_handler(self):
         logger.info('Received SIGTERM signal, exiting')

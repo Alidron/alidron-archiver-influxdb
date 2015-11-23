@@ -12,3 +12,6 @@ admin-user:
     hostname: env['DB_PORT_8086_TCP_ADDR']
     port: env['DB_PORT_8086_TCP_PORT']
     scheme: influxdb
+
+buffer:
+    path: /data/buffer.pkl
