@@ -27,6 +27,8 @@ from isac.tools import Observable
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+logging.basicConfig(level=logging.INFO)
+
 logger.info('Starting')
 
 print 'Version:', influxdb.__version__
@@ -172,12 +174,7 @@ class InfluxDBArchiver(object):
             }]
         logger.info('Writing for %s: %s, %s, %s', name, ts_, ns, data)
 
-        self._retry_send_buffer()
-        try:
-            self._client.write_points(data, time_precision='ms')
-        except ConnectionError as ex:
-            logger.error('Failed to write to DB, writing to buffer: %s', ex)
-            self._add_to_buffer(data)
+        self._write_data(data)
 
     def _notify_metadata(self, name, metadata):
         if not isinstance(metadata, dict):
@@ -190,42 +187,33 @@ class InfluxDBArchiver(object):
         }]
         logger.info('Writing metadata for %s: %s', name, metadata)
 
-        self._retry_send_buffer()
-        try:
-            self._client.write_points(data, time_precision='ms')
-        except ConnectionError as ex:
-            logger.error('Failed to write to DB, writing to buffer: %s', ex)
-            self._add_to_buffer(data)
+        self._write_data(data)
 
-    def _add_to_buffer(self, data):
+    def _write_data(self, data):
         previous_data = []
         if os.path.exists(config['buffer']['path']):
             with open(config['buffer']['path'], 'r') as buffer_r:
                 previous_data += pickle.load(buffer_r)
+            logger.info('Read %d records from buffer', len(previous_data))
 
-        with open(config['buffer']['path'], 'w') as buffer_w:
-            pickle.dump(previous_data + data, buffer_w, -1)
-
-        logger.info('One data point flushed to buffer')
-
-    def _retry_send_buffer(self):
-        if not os.path.exists(config['buffer']['path']):
-            return
-
-        with open(config['buffer']['path'], 'r') as buffer_r:
-            data = pickle.load(buffer_r)
-
-        if not data:
-            return
-
+        new_data = previous_data + data
         try:
-            self._client.write_points(data, time_precision='ms')
-        except ConnectionError:
-            logger.warning('Failed to write %d records from buffer, will retry later', len(data))
+            self._client.write_points(new_data, time_precision='ms')
+        except ConnectionError as ex:
+            logger.error('Failed to write to DB, flushing to buffer: %s', ex)
+
+            with open(config['buffer']['path'], 'w') as buffer_w:
+                pickle.dump(previous_data + data, buffer_w, -1)
+
+            logger.info('%d records in buffer', len(new_data))
+
             return
+
+        logger.info('Flushed %d records to DB', len(new_data))
 
         # Write succeeded, clear buffer
-        os.remove(config['buffer']['path'])
+        if os.path.exists(config['buffer']['path']):
+            os.remove(config['buffer']['path'])
 
     def _sigterm_handler(self):
         logger.info('Received SIGTERM signal, exiting')
