@@ -122,7 +122,12 @@ class InfluxDBArchiver(object):
 
             print '##############', value_name, type(metadata.get(value_name, None)), metadata.get(value_name, None)
             last_point = fields.next()
-            ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%SZ') # TODO: deal with nanoseconds (and microseconds...)
+            
+            try:
+                ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%S.%fZ')
+            except ValueError:
+                ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%SZ')
+
             self.signals[value_name] = InfluxDBArchivedValue(
                 self.isac_node, value_name,
                 initial_value=(last_point['value'], ts),
