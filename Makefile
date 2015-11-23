@@ -4,7 +4,7 @@ registry = neuron.local:6666
 
 container_name = al-arch-influx
 
-run_args = -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=8086 -v $(CURDIR):/workspace # --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac
+run_args = --net=alidron -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=8086 -v $(CURDIR):/workspace # --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac
 exec_args = python alidron-archiver.py
 
 .PHONY: clean clean-dangling build build-rpi push push-rpi pull pull-rpi run-bash run-bash-rpi run run-rpi
@@ -49,9 +49,8 @@ run-rpi:
 	docker run -d --name=$(container_name) $(run_args) $(rpi_image_name) $(exec_args)
 
 stop:
-	docker stop $(container_name)
+	docker stop -t 0 $(container_name)
 	docker rm $(container_name)
 
 logs:
 	docker logs -f $(container_name)
-

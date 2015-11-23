@@ -6,31 +6,34 @@ import signal
 import sys
 import time
 import yaml
+from datetime import datetime
 from functools import partial
 from math import floor
-from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
-from influxdb.influxdb08.client import InfluxDBClientError
+from pprint import pprint as pp
+
+#from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
+#from influxdb.influxdb08.client import InfluxDBClientError
+import influxdb
+from influxdb import InfluxDBClient
+from influxdb.client import InfluxDBClientError
 
 import gevent
 
-from isac import IsacNode, IsacValue, Observable
+from isac import IsacNode, ArchivedValue
+from isac.tools import Observable
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 logger.info('Starting')
 
-class ArchivedValue(IsacValue):
+print 'Version:', influxdb.__version__
+
+class InfluxDBArchivedValue(ArchivedValue):
 
     def __init__(self, *args, **kwargs):
         self.influxdb_client = kwargs.pop('influxdb_client')
-        super(ArchivedValue, self).__init__(*args, **kwargs)
-
-        logger.info('Registering get_history_impl for %s', self.name)
-        self.isac_node.rpc_service.register(
-            self.get_history_impl,
-            name='.'.join((self.name, 'get_history_impl'))
-        )
+        super(self.__class__, self).__init__(*args, **kwargs)
 
     def get_history_impl(self, time_period):
         logger.info('Got a call for get_history_impl for value %s with a time period of %s', self.name, time_period)
@@ -68,15 +71,16 @@ class InfluxDBArchiver(object):
     @staticmethod
     def make_DSN(with_db=True, **kwargs):
         if with_db:
-            return '{scheme}://{username}@{hostname}:{port}/{db}'.format(**kwargs)
+            return '{scheme}://{username}:{password}@{hostname}:{port}/{db}'.format(**kwargs)
         else:
-            return '{scheme}://{username}@{hostname}:{port}'.format(**kwargs)
+            return '{scheme}://{username}:{password}@{hostname}:{port}'.format(**kwargs)
 
     def __init__(self, config):
         dsn = InfluxDBArchiver.make_DSN(**config['archiver-user'])
-        self._client = InfluxDBClient.from_DSN(dsn, password=config['archiver-user']['password'])
+        # self._client = InfluxDBClient.from_DSN(dsn, password=config['archiver-user']['password'])
+        self._client = InfluxDBClient.from_DSN(dsn)
         try:
-            self._client.query('list series')
+            self._client.query('show measurements')
         except InfluxDBClientError as ex:
             if ex.code != 401:
                 raise
@@ -104,23 +108,24 @@ class InfluxDBArchiver(object):
 
         self.signals = {}
 
-        raw_data = self._client.query('SELECT * FROM /.*/ LIMIT 1', time_precision='ms')
+        raw_data = self._client.query('SELECT * FROM /.*/ LIMIT 1')
         metadata = {}
-        for value_last_point in raw_data:
-            value_name = value_last_point['name'].encode()
+        for meas_tags, fields in raw_data.items():
+            value_name = meas_tags[0].encode()
             if value_name.startswith('metadata.'):
-                metadata[value_name[9:]] = json.loads(value_last_point['points'][0][2])
+                metadata[value_name[9:]] = json.loads(fields.next())
 
-        for value_last_point in raw_data:
-            value_name = value_last_point['name'].encode()
+        for meas_tags, fields in raw_data.items():
+            value_name = meas_tags[0].encode()
             if value_name.startswith('metadata.'):
                 continue
 
             print '##############', value_name, type(metadata.get(value_name, None)), metadata.get(value_name, None)
-            ts_float = (value_last_point['points'][0][0] * 1e-3) + (value_last_point['points'][0][1] * 1e-9)
-            self.signals[value_name] = ArchivedValue(
+            last_point = fields.next()
+            ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%SZ') # TODO: deal with nanoseconds (and microseconds...)
+            self.signals[value_name] = InfluxDBArchivedValue(
                 self.isac_node, value_name,
-                initial_value=(value_last_point['points'][0][2], ts_float),
+                initial_value=(last_point['value'], ts),
                 observers=Observable([self._notify]), influxdb_client=self._client,
                 metadata=metadata.get(value_name, None)
             )
@@ -135,27 +140,40 @@ class InfluxDBArchiver(object):
         signal_name = signal_name.encode()
         if signal_name not in self.signals:
             logger.info('Signal %s will be archived', signal_name)
-            self.signals[signal_name] = ArchivedValue(self.isac_node, signal_name, observers=Observable([self._notify]), influxdb_client=self._client)
+            self.signals[signal_name] = InfluxDBArchivedValue(self.isac_node, signal_name, observers=Observable([self._notify]), influxdb_client=self._client)
             self.signals[signal_name].metadata_observers += self._notify_metadata
             self.signals[signal_name].survey_metadata()
 
 
     def _notify(self, name, value, ts):
         ts_ = int((time.mktime(ts.timetuple()) * 1000) + floor(ts.microsecond / 1000))
-        seq_n = (ts.microsecond % 1000) * 1000 # Give the nanosecond resolution
-        data = [{
-            'name': name,
-            'columns': ['time', 'sequence_number', 'value'],
-            'points': [[ts_, seq_n, value]],
-        }]
-        logger.info('Writing for %s: %s, %s, %s', name, ts_, seq_n, data)
+        ns = (ts.microsecond % 1000) * 1000 # Give the nanosecond resolution
+        if ns:
+            data = [{
+                'measurement': name,
+                'time': ts,
+                'fields': {'value': value},
+                'tags': {'nanosecond': ns},
+                #'columns': ['time', 'sequence_number', 'value'],
+                #'points': [[ts_, seq_n, value]],
+            }]
+        else:
+            data = [{
+                'measurement': name,
+                'time': ts,
+                'fields': {'value': value},
+            }]
+        logger.info('Writing for %s: %s, %s, %s', name, ts_, ns, data)
         self._client.write_points(data, time_precision='ms')
 
     def _notify_metadata(self, name, metadata):
+        if not isinstance(metadata, dict):
+            metadata = {'metadata': metadata}
         data = [{
-            'name': 'metadata.' + name,
-            'columns': ['metadata'],
-            'points': [[json.dumps(metadata)]],
+            'measurement': 'metadata.' + name,
+            'fields': metadata
+            #'columns': ['metadata'],
+            #'points': [[json.dumps(metadata)]],
         }]
         logger.info('Writing metadata for %s: %s', name, metadata)
         self._client.write_points(data)
@@ -196,4 +214,3 @@ if __name__ == '__main__':
 
     client = InfluxDBArchiver(config)
     client.serve_forever()
-
