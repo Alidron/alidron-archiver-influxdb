@@ -75,7 +75,6 @@ class InfluxDBArchivedValue(ArchivedValue):
                 for k, v in point.items():
                     if k.startswith('d_'):
                         dynamic_tags[k[2:]] = v
-                dynamic_tags = dynamic_tags if dynamic_tags else None # TODO: Remove
 
                 data.append((point['value'], ts_float, dynamic_tags, point['peer_name'], point['peer_uuid']))
 
@@ -156,8 +155,6 @@ class InfluxDBArchiver(object):
                     static_tags[k[2:]] = v
                 elif k.startswith('d_'):
                     dynamic_tags[k[2:]] = v
-            static_tags = static_tags if static_tags else None # TODO: Remove
-            dynamic_tags = dynamic_tags if dynamic_tags else None # TODO: Remove
 
             logger.info('For URI %s: %s, %s', uri_str, ts, pf(last_point))
 
@@ -187,10 +184,9 @@ class InfluxDBArchiver(object):
 
     @staticmethod
     def _prefix_keys(d, prefix):
-        d = d if d else {}
         return {prefix+k: v for k, v in d.items()}
 
-    def _notify(self, iv, value, ts, dynamic_tags, peer_name, peer_uuid):
+    def _notify(self, iv, value, ts, dynamic_tags):
         # We are already in a green thread here
         uri = urisplit(iv.uri)
 
@@ -198,8 +194,6 @@ class InfluxDBArchiver(object):
         tags.update(self._prefix_keys(dynamic_tags, 'd_'))
         tags['authority'] = uri.authority
         tags['path'] = uri.path
-        tags['peer_name'] = peer_name
-        tags['peer_uuid'] = peer_uuid
 
         precision = config.get('config', {}).get('default_precision', 'ms')
         if iv.metadata:
@@ -228,9 +222,6 @@ class InfluxDBArchiver(object):
         tags.update(self._prefix_keys(iv.tags, 'd_'))
         tags['authority'] = uri.authority
         tags['path'] = uri.path
-        # TODO:
-        # tags['peer_name'] = peer_name
-        # tags['peer_uuid'] = peer_uuid
 
         data = [{
             'measurement': uri.scheme,
@@ -251,7 +242,7 @@ class InfluxDBArchiver(object):
         new_data = previous_data + data
         try:
             self._client.write_points(new_data, time_precision=precision)
-        except ConnectionError as ex:
+        except (ConnectionError, InfluxDBClientError) as ex:
             logger.error('Failed to write to DB, flushing to buffer: %s', ex)
 
             with open(config['buffer']['path'], 'w') as buffer_w:
