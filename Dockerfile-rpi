@@ -4,6 +4,7 @@ MAINTAINER Axel Voitier <axel.voitier@gmail.com>
 #RUN pip install prospector
 
 RUN pip install influxdb pyaml
+RUN pip install uritools
 
 #COPY . /usr/src/alidron-isac
 ENV PYTHONPATH=/usr/src/alidron-isac

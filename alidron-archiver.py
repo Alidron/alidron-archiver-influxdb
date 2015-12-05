@@ -10,8 +10,9 @@ import yaml
 from datetime import datetime
 from functools import partial
 from math import floor
-from pprint import pprint as pp
+from pprint import pprint as pp, pformat as pf
 from requests.exceptions import ConnectionError
+from uritools import urisplit, uricompose
 
 #from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
 #from influxdb.influxdb08.client import InfluxDBClientError
@@ -19,10 +20,8 @@ import influxdb
 from influxdb import InfluxDBClient
 from influxdb.client import InfluxDBClientError
 
-import gevent
-
 from isac import IsacNode, ArchivedValue
-from isac.tools import Observable
+from isac.tools import Observable, green
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -40,32 +39,45 @@ class InfluxDBArchivedValue(ArchivedValue):
         super(self.__class__, self).__init__(*args, **kwargs)
 
     def get_history_impl(self, time_period):
-        logger.info('Got a call for get_history_impl for value %s with a time period of %s', self.name, time_period)
+        logger.info('Got a call for get_history_impl for value %s with a time period of %s', self.uri, time_period)
 
         begin, end = time_period
         if begin and end:
-            time_filter = 'WHERE time > %fs AND time < %fs' % (begin, end)
+            time_filter = 'AND time > %du AND time < %du' % (begin*1e6, end*1e6)
         elif begin and not end:
-            time_filter = 'WHERE time > %fs' % begin
+            time_filter = 'AND time > %du' % begin*1e6
         elif not begin and end:
-            time_filter = 'WHERE time < %fs' % end
+            time_filter = 'AND time < %du' % end*1e6
         else:
             time_filter = ''
 
-        query = 'SELECT * FROM %s %s' % (self.name, time_filter)
+        uri = urisplit(self.uri)
+        query = "SELECT * FROM %s WHERE authority='%s' AND path='%s' %s" % (uri.scheme, uri.authority, uri.path, time_filter)
         logger.info('Doing query: %s', query)
         try:
-            raw_data = self.influxdb_client.query(query, time_precision='ms')
+            raw_data = self.influxdb_client.query(query)
         except InfluxDBClientError as ex:
             if ex.code != 400:
                 raise
             raw_data = []
 
+        logger.debug('Raw data: %s', pf(list(raw_data.items()[0][1])))
         data = []
         if raw_data:
-            for point in raw_data[0]['points']:
-                ts_float = (point[0] * 1e-3) + (point[1] * 1e-9)
-                data.append((point[2], ts_float))
+            for point in raw_data.items()[0][1]:
+                try:
+                    ts = datetime.strptime(point['time'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                except ValueError:
+                    ts = datetime.strptime(point['time'], '%Y-%m-%dT%H:%M:%SZ')
+                ts_float = time.mktime(ts.timetuple()) + (ts.microsecond / 1000000.0)
+
+                dynamic_tags = {}
+                for k, v in point.items():
+                    if k.startswith('d_'):
+                        dynamic_tags[k[2:]] = v
+                dynamic_tags = dynamic_tags if dynamic_tags else None # TODO: Remove
+
+                data.append((point['value'], ts_float, dynamic_tags, point['peer_name'], point['peer_uuid']))
 
         return data
 
@@ -107,89 +119,129 @@ class InfluxDBArchiver(object):
 
 
         self.isac_node = IsacNode('alidron-archiver-influxdb')
-        gevent.signal(signal.SIGTERM, partial(self._sigterm_handler))
-        gevent.signal(signal.SIGINT, partial(self._sigterm_handler))
+        green.signal(signal.SIGTERM, partial(self._sigterm_handler))
+        green.signal(signal.SIGINT, partial(self._sigterm_handler))
 
         self.signals = {}
 
-        raw_data = self._client.query('SELECT * FROM /.*/ LIMIT 1')
+        raw_data = self._client.query('SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1')
+        logger.info('Raw data: %s', pf(raw_data.items()))
         metadata = {}
-        for meas_tags, fields in raw_data.items():
-            value_name = meas_tags[0].encode()
-            if value_name.startswith('metadata.'):
-                metadata[value_name[9:]] = fields.next()
+
+        def _make_uri(meas, tags):
+            uri_str = uricompose(scheme=meas, authority=tags['authority'], path=tags['path'])
+            return uri_str, urisplit(uri_str)
 
         for meas_tags, fields in raw_data.items():
-            value_name = meas_tags[0].encode()
-            if value_name.startswith('metadata.'):
+            uri_str, uri = _make_uri(*meas_tags)
+            if uri.scheme == 'metadata':
+                metadata[uri_str] = fields.next()
+
+        for meas_tags, data in raw_data.items():
+            uri_str, uri = _make_uri(*meas_tags)
+            if uri.scheme == 'metadata':
                 continue
 
-            print '##############', value_name, type(metadata.get(value_name, None)), metadata.get(value_name, None)
-            last_point = fields.next()
+            last_point = data.next()
 
             try:
                 ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%S.%fZ')
             except ValueError:
                 ts = datetime.strptime(last_point['time'], '%Y-%m-%dT%H:%M:%SZ')
 
-            self.signals[value_name] = InfluxDBArchivedValue(
-                self.isac_node, value_name,
+            static_tags = {}
+            dynamic_tags = {}
+            for k, v in last_point.items():
+                if k.startswith('s_'):
+                    static_tags[k[2:]] = v
+                elif k.startswith('d_'):
+                    dynamic_tags[k[2:]] = v
+            static_tags = static_tags if static_tags else None # TODO: Remove
+            dynamic_tags = dynamic_tags if dynamic_tags else None # TODO: Remove
+
+            logger.info('For URI %s: %s, %s', uri_str, ts, pf(last_point))
+
+            self.signals[uri_str] = InfluxDBArchivedValue(
+                self.isac_node, uri_str,
                 initial_value=(last_point['value'], ts),
+                static_tags=static_tags, dynamic_tags=dynamic_tags,
                 observers=Observable([self._notify]), influxdb_client=self._client,
-                metadata=metadata.get(value_name, None)
+                metadata=metadata.get(uri_str, None),
+                survey_last_value=False,
+                survey_static_tags=False
             )
-            self.signals[value_name].metadata_observers += self._notify_metadata
-            self.signals[value_name].survey_metadata()
+            self.signals[uri_str].metadata_observers += self._notify_metadata
+            self.signals[uri_str].survey_metadata()
 
         self.isac_node.register_isac_value_entering(self._new_signal)
-        signal_names = self.isac_node.survey_value_name('.*')
-        map(partial(self._new_signal, ''), signal_names)
+        signal_uris = self.isac_node.survey_value_uri('.*')
+        map(partial(self._new_signal, ''), signal_uris)
 
-    def _new_signal(self, peer_name, signal_name):
-        signal_name = signal_name.encode()
-        if signal_name not in self.signals:
-            logger.info('Signal %s will be archived', signal_name)
-            self.signals[signal_name] = InfluxDBArchivedValue(self.isac_node, signal_name, observers=Observable([self._notify]), influxdb_client=self._client)
-            self.signals[signal_name].metadata_observers += self._notify_metadata
-            self.signals[signal_name].survey_metadata()
+    def _new_signal(self, peer_name, signal_uri):
+        signal_uri = signal_uri.encode()
+        if signal_uri not in self.signals:
+            logger.info('Signal %s will be archived', signal_uri)
+            self.signals[signal_uri] = InfluxDBArchivedValue(self.isac_node, signal_uri, observers=Observable([self._notify]), influxdb_client=self._client)
+            self.signals[signal_uri].metadata_observers += self._notify_metadata
+            self.signals[signal_uri].survey_metadata()
 
+    @staticmethod
+    def _prefix_keys(d, prefix):
+        d = d if d else {}
+        return {prefix+k: v for k, v in d.items()}
 
-    def _notify(self, name, value, ts):
-        ts_ = int((time.mktime(ts.timetuple()) * 1000) + floor(ts.microsecond / 1000))
-        ns = (ts.microsecond % 1000) * 1000 # Give the nanosecond resolution
-        if ns:
-            data = [{
-                'measurement': name,
-                'time': ts,
-                'fields': {'value': value},
-                'tags': {'nanosecond': ns},
-                #'columns': ['time', 'sequence_number', 'value'],
-                #'points': [[ts_, seq_n, value]],
-            }]
-        else:
-            data = [{
-                'measurement': name,
-                'time': ts,
-                'fields': {'value': value},
-            }]
-        logger.info('Writing for %s: %s, %s, %s', name, ts_, ns, data)
+    def _notify(self, iv, value, ts, dynamic_tags, peer_name, peer_uuid):
+        # We are already in a green thread here
+        uri = urisplit(iv.uri)
 
-        self._write_data(data)
+        tags = self._prefix_keys(iv.static_tags, 's_')
+        tags.update(self._prefix_keys(dynamic_tags, 'd_'))
+        tags['authority'] = uri.authority
+        tags['path'] = uri.path
+        tags['peer_name'] = peer_name
+        tags['peer_uuid'] = peer_uuid
 
-    def _notify_metadata(self, name, metadata):
+        precision = config.get('config', {}).get('default_precision', 'ms')
+        if iv.metadata:
+            if 'ts_precision' in iv.metadata:
+                precision = iv.metadata['ts_precision']
+
+        data = [{
+            'measurement': uri.scheme,
+            'time': ts,
+            'fields': {'value': value},
+            'tags': tags,
+        }]
+
+        logger.info('Writing for %s: %s', uri, data)
+
+        self._write_data(data, precision)
+
+    def _notify_metadata(self, iv, metadata):
+        # We are already in a green thread here
         if not isinstance(metadata, dict):
             metadata = {'metadata': metadata}
+
+        uri = urisplit(iv.uri)
+
+        tags = self._prefix_keys(iv.static_tags, 's_')
+        tags.update(self._prefix_keys(iv.tags, 'd_'))
+        tags['authority'] = uri.authority
+        tags['path'] = uri.path
+        # TODO:
+        # tags['peer_name'] = peer_name
+        # tags['peer_uuid'] = peer_uuid
+
         data = [{
-            'measurement': 'metadata.' + name,
-            'fields': metadata
-            #'columns': ['metadata'],
-            #'points': [[json.dumps(metadata)]],
+            'measurement': uri.scheme,
+            'fields': metadata,
+            'tags': tags
         }]
-        logger.info('Writing metadata for %s: %s', name, metadata)
+        logger.info('Writing metadata for %s: %s', uri, metadata)
 
         self._write_data(data)
 
-    def _write_data(self, data):
+    def _write_data(self, data, precision='ms'):
         previous_data = []
         if os.path.exists(config['buffer']['path']):
             with open(config['buffer']['path'], 'r') as buffer_r:
@@ -198,7 +250,7 @@ class InfluxDBArchiver(object):
 
         new_data = previous_data + data
         try:
-            self._client.write_points(new_data, time_precision='ms')
+            self._client.write_points(new_data, time_precision=precision)
         except ConnectionError as ex:
             logger.error('Failed to write to DB, flushing to buffer: %s', ex)
 
@@ -224,7 +276,7 @@ class InfluxDBArchiver(object):
     def serve_forever(self):
         try:
             while True:
-                gevent.sleep(1)
+                green.sleep(1)
         except (KeyboardInterrupt, SystemExit):
             logger.info('Stopping')
             self.isac_node.shutdown()
