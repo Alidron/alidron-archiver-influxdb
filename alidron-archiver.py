@@ -24,7 +24,6 @@ from isac import IsacNode, ArchivedValue
 from isac.tools import Observable, green
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -124,7 +123,7 @@ class InfluxDBArchiver(object):
         self.signals = {}
 
         raw_data = self._client.query('SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1')
-        logger.info('Raw data: %s', pf(raw_data.items()))
+        logger.debug('Raw data: %s', pf(raw_data.items()))
         metadata = {}
 
         def _make_uri(meas, tags):
@@ -156,7 +155,7 @@ class InfluxDBArchiver(object):
                 elif k.startswith('d_'):
                     dynamic_tags[k[2:]] = v
 
-            logger.info('For URI %s: %s, %s', uri_str, ts, pf(last_point))
+            logger.debug('For URI %s: %s, %s', uri_str, ts, pf(last_point))
 
             self.signals[uri_str] = InfluxDBArchivedValue(
                 self.isac_node, uri_str,
@@ -181,6 +180,7 @@ class InfluxDBArchiver(object):
             self.signals[signal_uri] = InfluxDBArchivedValue(self.isac_node, signal_uri, observers=Observable([self._notify]), influxdb_client=self._client)
             self.signals[signal_uri].metadata_observers += self._notify_metadata
             self.signals[signal_uri].survey_metadata()
+            logger.debug('>>>>> static_tags %s: %s', signal_uri, self.signals[signal_uri].static_tags)
 
     @staticmethod
     def _prefix_keys(d, prefix):
