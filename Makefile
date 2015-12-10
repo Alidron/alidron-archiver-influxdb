@@ -13,7 +13,7 @@ clean:
 	docker rmi $(image_name) || true
 
 clean-dangling:
-	docker rmi $(docker images -q -f dangling=true) || true
+	docker rmi `docker images -q -f dangling=true` || true
 
 build: clean-dangling
 	docker build --force-rm=true -t $(image_name) .
