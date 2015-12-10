@@ -311,6 +311,11 @@ def _config_parse_env(config):
 
 
 if __name__ == '__main__':
+    try:
+        config_file = sys.argv[1]
+    except IndexError:
+        config_file = 'config.yaml'
+        
     with open('config.yaml', 'r') as config_file:
         config = yaml.load(config_file)
 
