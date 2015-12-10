@@ -75,7 +75,7 @@ class InfluxDBArchivedValue(ArchivedValue):
                     if k.startswith('d_'):
                         dynamic_tags[k[2:]] = v
 
-                data.append((point['value'], ts_float, dynamic_tags, point['peer_name'], point['peer_uuid']))
+                data.append((point['value'], ts_float, dynamic_tags))
 
         return data
 
@@ -276,7 +276,7 @@ class InfluxDBArchiver(object):
 def _config_parse_env(config):
     if isinstance(config, list):
         map(_config_parse_env, config)
-    else:
+    elif isinstance(config, dict):
         for k,v in config.items():
             if isinstance(v, str) or isinstance(v, unicode):
                 m = re.match("env\['(.*)'\]", v)
