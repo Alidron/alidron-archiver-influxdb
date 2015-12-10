@@ -18,3 +18,4 @@ buffer:
 
 config:
     default_precision: ms
+    default_smoothing: True

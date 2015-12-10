@@ -189,23 +189,47 @@ class InfluxDBArchiver(object):
     def _notify(self, iv, value, ts, dynamic_tags):
         # We are already in a green thread here
         uri = urisplit(iv.uri)
+        data = []
 
-        tags = self._prefix_keys(iv.static_tags, 's_')
-        tags.update(self._prefix_keys(dynamic_tags, 'd_'))
-        tags['authority'] = uri.authority
-        tags['path'] = uri.path
+        def _make_data(value, ts, dynamic_tags):
+            tags = self._prefix_keys(iv.static_tags, 's_')
+            tags.update(self._prefix_keys(dynamic_tags, 'd_'))
+            tags['authority'] = uri.authority
+            tags['path'] = uri.path
+
+            return {
+                'measurement': uri.scheme,
+                'time': ts,
+                'fields': {'value': value},
+                'tags': tags,
+            }
+
+        # Handle smoothing
+        default_smoothing = bool(config.get('config', {}).get('default_smoothing', False))
+        smoothing = iv.metadata.get('smoothing', default_smoothing) if iv.metadata else default_smoothing
+        logger.debug('Smoothing: %s', smoothing)
+        if smoothing:
+            prev_value, prev_ts, prev_tags = getattr(iv, '_arch_prev_update', (None, datetime.fromtimestamp(0), {}))
+            in_smoothing = getattr(iv, '_arch_in_smoothing', False)
+
+            iv._arch_prev_update = (value, ts, dynamic_tags)
+            if (prev_value == value) and (dynamic_tags == prev_tags):
+                logger.debug('Smoothing detected same value and tags, not sending to DB')
+                iv._arch_in_smoothing = True
+                return
+            elif in_smoothing:
+                # Flush last same value to provide an end time for the smoothed out period
+                logger.debug('Smoothing detected a different value than the one smoothed before. Flushing last same value')
+                data.append(_make_data(prev_value, prev_ts, prev_tags))
+                iv._arch_in_smoothing = False
+            else:
+                logger.debug('Smoothing detected normal value change: %s, %s, %s / %s, %s, %s', prev_value, prev_ts, prev_tags, value, ts, dynamic_tags)
+
+        data.append(_make_data(value, ts, dynamic_tags))
 
         precision = config.get('config', {}).get('default_precision', 'ms')
-        if iv.metadata:
-            if 'ts_precision' in iv.metadata:
-                precision = iv.metadata['ts_precision']
-
-        data = [{
-            'measurement': uri.scheme,
-            'time': ts,
-            'fields': {'value': value},
-            'tags': tags,
-        }]
+        if iv.metadata and 'ts_precision' in iv.metadata:
+            precision = iv.metadata['ts_precision']
 
         logger.info('Writing for %s: %s', uri, data)
 
