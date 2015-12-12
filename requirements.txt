@@ -1,0 +1,3 @@
+pyaml
+https://github.com/influxdb/influxdb-python/archive/master.zip
+uritools
