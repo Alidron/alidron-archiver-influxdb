@@ -6,6 +6,7 @@ then
     docker rm influx-test
 fi
 
+docker pull tutum/influxdb:0.9
 docker run -d --name influx-test -p 8083:8083 -p 8086:8086 tutum/influxdb:0.9
 
 sleep 1
