@@ -16,7 +16,6 @@ from uritools import urisplit, uricompose
 
 #from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
 #from influxdb.influxdb08.client import InfluxDBClientError
-import influxdb
 from influxdb import InfluxDBClient
 from influxdb.client import InfluxDBClientError
 
@@ -24,12 +23,6 @@ from isac import IsacNode, ArchivedValue
 from isac.tools import Observable, green
 
 logger = logging.getLogger(__name__)
-
-logging.basicConfig(level=logging.INFO)
-
-logger.info('Starting')
-
-print 'Version:', influxdb.__version__
 
 class InfluxDBArchivedValue(ArchivedValue):
 
@@ -90,30 +83,40 @@ class InfluxDBArchiver(object):
             return '{scheme}://{username}:{password}@{hostname}:{port}'.format(**kwargs)
 
     def __init__(self, config):
-        dsn = InfluxDBArchiver.make_DSN(**config['archiver-user'])
-        # self._client = InfluxDBClient.from_DSN(dsn, password=config['archiver-user']['password'])
+        logger.info('Starting')
+        self.config = config
+
+        buffer_path = self.config['buffer']['path']
+        if not os.path.exists(os.path.dirname(buffer_path)):
+            os.makedirs(os.path.dirname(buffer_path))
+
+        dsn = InfluxDBArchiver.make_DSN(**self.config['archiver-user'])
+        # self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
         self._client = InfluxDBClient.from_DSN(dsn)
         try:
             self._client.query('show measurements')
         except InfluxDBClientError as ex:
-            if ex.code != 401:
-                raise
+            if ex.code == 401:
+                logger.warning('Could not connect as user %s, trying as root to setup the DB', self.config['archiver-user']['username'])
+                self._create_user()
 
-            logger.info('Could not connect as user %s, trying as root to setup the DB', config['archiver-user']['username'])
+            elif ex.message.startswith('database not found'):
+                logger.warning('Could not find database %s, creating it', self.config['archiver-user']['db'])
+                self._create_db()
 
-            dsn = InfluxDBArchiver.make_DSN(with_db=False, **config['admin-user'])
-            client = InfluxDBClient.from_DSN(dsn, password=config['admin-user']['password'])
-
-            db_list = client.get_list_database()
-            if config['archiver-user']['db'] not in map(lambda db: db['name'], db_list):
-                logger.info('Creating database %s', config['archiver-user']['db'])
-                client.create_database(config['archiver-user']['db'])
-
-            # Can't do much from here with the 0.8 api
-            # But from 0.9 we can use get_list_users, switch_database and create_user
-
-            dsn = InfluxDBArchiver.make_DSN(**config['archiver-user'])
-            self._client = InfluxDBClient.from_DSN(dsn, password=config['archiver-user']['password'])
+            # dsn = InfluxDBArchiver.make_DSN(with_db=False, **self.config['admin-user'])
+            # client = InfluxDBClient.from_DSN(dsn, password=self.config['admin-user']['password'])
+            #
+            # db_list = client.get_list_database()
+            # if self.config['archiver-user']['db'] not in map(lambda db: db['name'], db_list):
+            #     logger.info('Creating database %s', self.config['archiver-user']['db'])
+            #     client.create_database(self.config['archiver-user']['db'])
+            #
+            # # Can't do much from here with the 0.8 api
+            # # But from 0.9 we can use get_list_users, switch_database and create_user
+            #
+            # dsn = InfluxDBArchiver.make_DSN(**self.config['archiver-user'])
+            # self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
 
 
         self.isac_node = IsacNode('alidron-archiver-influxdb')
@@ -133,11 +136,23 @@ class InfluxDBArchiver(object):
         for meas_tags, fields in raw_data.items():
             uri_str, uri = _make_uri(*meas_tags)
             if uri.scheme == 'metadata':
-                metadata[uri_str] = fields.next()
+                raw_metadata = fields.next()
+                uri_str = uri_str.replace('metadata', raw_metadata['scheme'], 1)
+                metadata[uri_str] = {}
+                for key, value in raw_metadata.items():
+                    if key.startswith('d_') or key.startswith('s_') or key in ['time', 'scheme']:
+                        continue
+                    if (key == 'value') and (value is None):
+                        continue
+
+                    metadata[uri_str][key] = value
+
+                logger.debug('Read metadata for %s: %s', uri_str, metadata[uri_str])
 
         for meas_tags, data in raw_data.items():
             uri_str, uri = _make_uri(*meas_tags)
             if uri.scheme == 'metadata':
+                logger.warning('Discarding metadata: %s, %s', uri_str, data.next())
                 continue
 
             last_point = data.next()
@@ -156,6 +171,7 @@ class InfluxDBArchiver(object):
                     dynamic_tags[k[2:]] = v
 
             logger.debug('For URI %s: %s, %s', uri_str, ts, pf(last_point))
+            logger.debug('Decoded tags: %s, %s', static_tags, dynamic_tags)
 
             self.signals[uri_str] = InfluxDBArchivedValue(
                 self.isac_node, uri_str,
@@ -172,6 +188,11 @@ class InfluxDBArchiver(object):
         self.isac_node.register_isac_value_entering(self._new_signal)
         signal_uris = self.isac_node.survey_value_uri('.*')
         map(partial(self._new_signal, ''), signal_uris)
+
+    def _create_db(self):
+        db = self.config['archiver-user']['db']
+        self._client.create_database(db)
+        self._client.alter_retention_policy('default', db, replication='3')
 
     def _new_signal(self, peer_name, signal_uri):
         signal_uri = signal_uri.encode()
@@ -205,10 +226,10 @@ class InfluxDBArchiver(object):
             }
 
         # Handle smoothing
-        default_smoothing = bool(config.get('config', {}).get('default_smoothing', False))
+        default_smoothing = bool(self.config.get('config', {}).get('default_smoothing', False))
         smoothing = iv.metadata.get('smoothing', default_smoothing) if iv.metadata else default_smoothing
         logger.debug('Smoothing: %s', smoothing)
-        if smoothing:
+        if bool(smoothing):
             prev_value, prev_ts, prev_tags = getattr(iv, '_arch_prev_update', (None, datetime.fromtimestamp(0), {}))
             in_smoothing = getattr(iv, '_arch_in_smoothing', False)
 
@@ -227,7 +248,7 @@ class InfluxDBArchiver(object):
 
         data.append(_make_data(value, ts, dynamic_tags))
 
-        precision = config.get('config', {}).get('default_precision', 'ms')
+        precision = self.config.get('config', {}).get('default_precision', 'ms')
         if iv.metadata and 'ts_precision' in iv.metadata:
             precision = iv.metadata['ts_precision']
 
@@ -246,9 +267,10 @@ class InfluxDBArchiver(object):
         tags.update(self._prefix_keys(iv.tags, 'd_'))
         tags['authority'] = uri.authority
         tags['path'] = uri.path
+        tags['scheme'] = uri.scheme
 
         data = [{
-            'measurement': uri.scheme,
+            'measurement': 'metadata',
             'fields': metadata,
             'tags': tags
         }]
@@ -258,8 +280,8 @@ class InfluxDBArchiver(object):
 
     def _write_data(self, data, precision='ms'):
         previous_data = []
-        if os.path.exists(config['buffer']['path']):
-            with open(config['buffer']['path'], 'r') as buffer_r:
+        if os.path.exists(self.config['buffer']['path']):
+            with open(self.config['buffer']['path'], 'r') as buffer_r:
                 previous_data += pickle.load(buffer_r)
             logger.info('Read %d records from buffer', len(previous_data))
 
@@ -269,7 +291,7 @@ class InfluxDBArchiver(object):
         except (ConnectionError, InfluxDBClientError) as ex:
             logger.error('Failed to write to DB, flushing to buffer: %s', ex)
 
-            with open(config['buffer']['path'], 'w') as buffer_w:
+            with open(self.config['buffer']['path'], 'w') as buffer_w:
                 pickle.dump(previous_data + data, buffer_w, -1)
 
             logger.info('%d records in buffer', len(new_data))
@@ -279,22 +301,27 @@ class InfluxDBArchiver(object):
         logger.info('Flushed %d records to DB', len(new_data))
 
         # Write succeeded, clear buffer
-        if os.path.exists(config['buffer']['path']):
-            os.remove(config['buffer']['path'])
+        if os.path.exists(self.config['buffer']['path']):
+            os.remove(self.config['buffer']['path'])
+
+    def shutdown(self):
+        logger.info('Stopping')
+        self._running = False
+        self.isac_node.shutdown()
 
     def _sigterm_handler(self):
         logger.info('Received SIGTERM signal, exiting')
-        self.isac_node.shutdown()
+        self.shutdown()
         logger.info('Exiting')
         sys.exit(0)
 
     def serve_forever(self):
+        self._running = True
         try:
-            while True:
+            while self._running:
                 green.sleep(1)
         except (KeyboardInterrupt, SystemExit):
-            logger.info('Stopping')
-            self.isac_node.shutdown()
+            self.shutdown()
 
 
 def _config_parse_env(config):
@@ -309,17 +336,25 @@ def _config_parse_env(config):
             else:
                 _config_parse_env(v)
 
+def _read_config_file(other_path=None):
+    if other_path:
+        config_path = other_path
+    else:
+        try:
+            config_path = sys.argv[1]
+        except IndexError:
+            config_path = 'config.yaml'
 
-if __name__ == '__main__':
-    try:
-        config_file = sys.argv[1]
-    except IndexError:
-        config_file = 'config.yaml'
-        
-    with open('config.yaml', 'r') as config_file:
+    with open(config_path, 'r') as config_file:
         config = yaml.load(config_file)
 
     _config_parse_env(config)
+    return config
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+
+    config = _read_config_file()
 
     client = InfluxDBArchiver(config)
     client.serve_forever()

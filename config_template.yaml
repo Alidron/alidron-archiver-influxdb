@@ -3,7 +3,7 @@ archiver-user:
     password: password
     hostname: env['DB_PORT_8086_TCP_ADDR']
     port: env['DB_PORT_8086_TCP_PORT']
-    db: alidron-data
+    db: alidron_data
     scheme: influxdb
 
 admin-user:
@@ -18,4 +18,4 @@ buffer:
 
 config:
     default_precision: ms
-    default_smoothing: True
+    default_smoothing: False

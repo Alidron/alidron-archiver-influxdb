@@ -1,6 +1,7 @@
 image_name = alidron/alidron-archiver-influxdb
 rpi_image_name = alidron/rpi-alidron-archiver-influxdb
-registry = neuron.local:6666
+#registry = neuron.local:6666
+registry = git.tinigrifi.org:5000
 
 container_name = al-arch-influx
 
@@ -20,12 +21,13 @@ build: clean-dangling
 
 build-rpi: clean-dangling
 	docker build --force-rm=true -t $(rpi_image_name) -f Dockerfile-rpi .
-	docker tag -f $(rpi_image_name) $(registry)/$(rpi_image_name)
 
 push:
+	docker tag -f $(image_name) $(registry)/$(image_name)
 	docker push $(registry)/$(image_name)
 
 push-rpi:
+	docker tag -f $(rpi_image_name) $(registry)/$(rpi_image_name)
 	docker push $(registry)/$(rpi_image_name)
 
 pull:
