@@ -83,7 +83,6 @@ def test_update_new_value(config, root_client, clean_db, one_node):
                 assert points[0]['s_static'] == iv.static_tags['static']
                 assert points[0]['d_peer_name'] == iv.isac_node.transport.name()
                 assert points[0]['d_peer_uuid'] == str(iv.isac_node.transport.uuid())
-                assert points[0]['d_test'] == iv.tags['test']
                 checked_metadata = True
 
             else:

@@ -259,7 +259,7 @@ class InfluxDBArchiver(object):
 
         self._write_data(data, precision)
 
-    def _notify_metadata(self, iv, metadata):
+    def _notify_metadata(self, iv, metadata, source_peer):
         # We are already in a green thread here
         if not isinstance(metadata, dict):
             metadata = {'metadata': metadata}
@@ -267,7 +267,7 @@ class InfluxDBArchiver(object):
         uri = urisplit(iv.uri)
 
         tags = self._prefix_keys(iv.static_tags, 's_')
-        tags.update(self._prefix_keys(iv.tags, 'd_'))
+        tags.update(self._prefix_keys(source_peer, 'd_'))
         tags['authority'] = uri.authority
         tags['path'] = uri.path
         tags['scheme'] = uri.scheme
