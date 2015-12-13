@@ -11,7 +11,16 @@ docker run -d --name influx-test -p 8083:8083 -p 8086:8086 tutum/influxdb:0.9
 
 sleep 1
 
-docker run --rm --name alidron-archiver-unittest --link influx-test:db  -e PYTHONPATH=/usr/src/alidron-isac:/app/alidron-archiver alidron/alidron-archiver-influxdb py.test -s --cov-report term-missing --cov-config /app/alidron-archiver/.coveragerc --cov alidron_archiver -x /app
+run_flags="--rm --name alidron-archiver-unittest --link influx-test:db -e PYTHONPATH=/usr/src/alidron-isac:/app/alidron-archiver"
+exec_flags="py.test -s --cov-report term-missing --cov-config /app/alidron-archiver/.coveragerc --cov alidron_archiver /app"
+
+if [ "$1" == "live" ]
+then
+    run_flags="$run_flags -v `pwd`:/app/alidron-archiver"
+    exec_flags="$exec_flags -x"
+fi
+
+docker run $run_flags alidron/alidron-archiver-influxdb $exec_flags
 
 if [ $? -eq 0 ]
 then

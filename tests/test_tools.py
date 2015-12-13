@@ -51,8 +51,11 @@ def two_nodes(request):
     request.addfinalizer(teardown)
     return nA, nB
 
-def degrade_time(t):
-    return datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, (t.microsecond / 1000) * 1000)
+def degrade_time(t, precision='ms'):
+    if precision == 'ms':
+        return datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, (t.microsecond / 1000) * 1000)
+    elif precision == 's':
+        return datetime(t.year, t.month, t.day, t.hour, t.minute, t.second)
 
 def compare_time(t1, t2_dt):
     if not isinstance(t1, datetime):
@@ -61,7 +64,7 @@ def compare_time(t1, t2_dt):
             t2_dt = degrade_time(t2_dt)
         except ValueError:
             t1_dt = datetime.strptime(t1, '%Y-%m-%dT%H:%M:%SZ')
-            t2_dt = datetime(t2_dt.year, t2_dt.month, t2_dt.day, t2_dt.hour, t2_dt.minute, t2_dt.second)
+            t2_dt = degrade_time(t2_dt, precision='s')
 
     else:
         t1_dt = t1

@@ -17,5 +17,5 @@ buffer:
     path: /data/buffer.pkl
 
 config:
-    default_precision: ms
+    default_ts_precision: ms
     default_smoothing: True

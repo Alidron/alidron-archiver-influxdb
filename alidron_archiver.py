@@ -24,6 +24,9 @@ from isac.tools import Observable, green
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TS_PRECISION = 'ms'
+DEFAULT_SMOOTHING = False
+
 class InfluxDBArchivedValue(ArchivedValue):
 
     def __init__(self, *args, **kwargs):
@@ -226,7 +229,7 @@ class InfluxDBArchiver(object):
             }
 
         # Handle smoothing
-        default_smoothing = bool(self.config.get('config', {}).get('default_smoothing', False))
+        default_smoothing = self.config.get('config', {}).get('default_smoothing', DEFAULT_SMOOTHING)
         smoothing = iv.metadata.get('smoothing', default_smoothing) if iv.metadata else default_smoothing
         logger.debug('Smoothing: %s', smoothing)
         if bool(smoothing):
@@ -248,7 +251,7 @@ class InfluxDBArchiver(object):
 
         data.append(_make_data(value, ts, dynamic_tags))
 
-        precision = self.config.get('config', {}).get('default_precision', 'ms')
+        precision = self.config.get('config', {}).get('default_ts_precision', DEFAULT_TS_PRECISION)
         if iv.metadata and 'ts_precision' in iv.metadata:
             precision = iv.metadata['ts_precision']
 
