@@ -1,7 +1,7 @@
 image_name = alidron/alidron-archiver-influxdb
 rpi_image_name = alidron/rpi-alidron-archiver-influxdb
 registry = registry.tinigrifi.org:5000
-rpi_registry = neuron.local:6666
+rpi_registry = neuron.local:6667
 
 container_name = al-arch-influx
 
