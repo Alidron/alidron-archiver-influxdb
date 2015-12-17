@@ -9,6 +9,13 @@ build-x86:
         - x86
     script:
         - make build
+    
+build-rpi:
+    stage: build
+    tags:
+        - rpi
+    script:
+        - make build-rpi
         
 test-x86:
     stage: test
@@ -16,10 +23,17 @@ test-x86:
         - x86
     script:
         - ./tests.sh
-        
+
 deploy-x86:
     stage: deploy
     tags:
         - x86
     script:
         - make push
+        
+deploy-rpi:
+    stage: deploy
+    tags:
+        - rpi
+    script:
+        - make push-rpi
