@@ -81,9 +81,9 @@ class InfluxDBArchiver(object):
     @staticmethod
     def make_DSN(with_db=True, **kwargs):
         if with_db:
-            return '{scheme}://{username}:{password}@{hostname}:{port}/{db}'.format(**kwargs)
+            return '{scheme}://{username}@{hostname}:{port}/{db}'.format(**kwargs)
         else:
-            return '{scheme}://{username}:{password}@{hostname}:{port}'.format(**kwargs)
+            return '{scheme}://{username}@{hostname}:{port}'.format(**kwargs)
 
     def __init__(self, config):
         logger.info('Starting')
@@ -94,33 +94,21 @@ class InfluxDBArchiver(object):
             os.makedirs(os.path.dirname(buffer_path))
 
         dsn = InfluxDBArchiver.make_DSN(**self.config['archiver-user'])
-        # self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
-        self._client = InfluxDBClient.from_DSN(dsn)
-        try:
-            self._client.query('show measurements')
-        except InfluxDBClientError as ex:
-            if ex.code == 401:
-                logger.warning('Could not connect as user %s, trying as root to setup the DB', self.config['archiver-user']['username'])
-                self._create_user()
-
-            elif ex.message.startswith('database not found'):
-                logger.warning('Could not find database %s, creating it', self.config['archiver-user']['db'])
-                self._create_db()
-
-            # dsn = InfluxDBArchiver.make_DSN(with_db=False, **self.config['admin-user'])
-            # client = InfluxDBClient.from_DSN(dsn, password=self.config['admin-user']['password'])
-            #
-            # db_list = client.get_list_database()
-            # if self.config['archiver-user']['db'] not in map(lambda db: db['name'], db_list):
-            #     logger.info('Creating database %s', self.config['archiver-user']['db'])
-            #     client.create_database(self.config['archiver-user']['db'])
-            #
-            # # Can't do much from here with the 0.8 api
-            # # But from 0.9 we can use get_list_users, switch_database and create_user
-            #
-            # dsn = InfluxDBArchiver.make_DSN(**self.config['archiver-user'])
-            # self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
-
+        for i in range(2):
+            self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
+            try:
+                self._client.query('SHOW MEASUREMENTS')
+                break
+            except InfluxDBClientError as ex:
+                if ex.code == 401:
+                    logger.error(ex)
+                    logger.warning('Could not connect as user %s, trying as root to setup the DB', self.config['archiver-user']['username'])
+                    self._create_user()
+                elif ex.message.startswith('database not found'):
+                    logger.warning('Could not find database %s, creating it', self.config['archiver-user']['db'])
+                    self._create_db()
+                else:
+                    raise
 
         self.isac_node = IsacNode('alidron-archiver-influxdb')
         green.signal(signal.SIGTERM, partial(self._sigterm_handler))
@@ -192,10 +180,23 @@ class InfluxDBArchiver(object):
         signal_uris = self.isac_node.survey_value_uri('.*')
         map(partial(self._new_signal, ''), signal_uris)
 
+    def _create_user(self):
+        dsn = InfluxDBArchiver.make_DSN(with_db=False, **self.config['admin-user'])
+        root_client = InfluxDBClient.from_DSN(dsn, password=self.config['admin-user']['password'])
+
+        root_client.create_user(self.config['archiver-user']['username'], self.config['archiver-user']['password'])
+        root_client.grant_privilege('all', self.config['archiver-user']['db'], self.config['archiver-user']['username'])
+
+        # dsn = InfluxDBArchiver.make_DSN(with_db=False, **self.config['archiver-user'])
+        # self._client = InfluxDBClient.from_DSN(dsn, password=self.config['archiver-user']['password'])
+
     def _create_db(self):
+        dsn = InfluxDBArchiver.make_DSN(with_db=False, **self.config['admin-user'])
+        root_client = InfluxDBClient.from_DSN(dsn, password=self.config['admin-user']['password'])
+
         db = self.config['archiver-user']['db']
-        self._client.create_database(db)
-        self._client.alter_retention_policy('default', db, replication='3')
+        root_client.create_database(db)
+        root_client.alter_retention_policy('default', db, replication='3')
 
     def _new_signal(self, peer_name, signal_uri):
         signal_uri = signal_uri.encode()

@@ -13,7 +13,7 @@ def config():
 @pytest.fixture(scope='module')
 def root_client(config):
     dsn = arch.InfluxDBArchiver.make_DSN(with_db=False, **config['admin-user'])
-    client = InfluxDBClient.from_DSN(dsn)
+    client = InfluxDBClient.from_DSN(dsn, password=config['admin-user']['password'])
 
     return client
 

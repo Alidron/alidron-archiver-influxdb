@@ -7,9 +7,20 @@ then
 fi
 
 docker pull tutum/influxdb:0.9
-docker run -d --name influx-test -p 8083:8083 -p 8086:8086 tutum/influxdb:0.9
+docker run --rm tutum/influxdb:0.9 cat /etc/influxdb/influxdb.conf > influxdb_test_config.toml
+sed -i 's/# engine ="bz1"/engine ="tsm1"/' influxdb_test_config.toml
+sed -i 's/auth-enabled = false/auth-enabled = true/' influxdb_test_config.toml
+docker run -d --name influx-test -p 8083:8083 -p 8086:8086 -v `pwd`/influxdb_test_config.toml:/config/config.toml tutum/influxdb:0.9
 
-sleep 1
+RET=1
+while [[ RET -ne 0 ]]; do
+    echo "=> Waiting for confirmation of InfluxDB service startup ..."
+    sleep 0.25
+    curl -k http://localhost:8086/ping 2> /dev/null
+    RET=$?
+done
+
+docker exec influx-test influx -host=localhost -port=8086 -execute="CREATE USER root WITH PASSWORD 'root' WITH ALL PRIVILEGES"
 
 run_flags="--rm --name alidron-archiver-unittest --link influx-test:db -e PYTHONPATH=/usr/src/alidron-isac:/app/alidron-archiver"
 exec_flags="py.test -s --cov-report term-missing --cov-config /app/alidron-archiver/.coveragerc --cov alidron_archiver /app"
