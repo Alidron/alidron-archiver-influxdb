@@ -1,0 +1,3 @@
+FROM tutum/influxdb:0.9
+
+COPY influxdb_test_config.toml /config/config.toml
