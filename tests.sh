@@ -1,5 +1,11 @@
 #!/bin/bash
 
+curl -V &> /dev/null
+if [ $? -ne 0 ]
+then
+    apt-get install -y --no-install-recommends curl
+fi
+
 if [ `docker ps -f "name=influx-test" | wc -l` -gt 1 ]
 then
     docker stop -t 0 influx-test
@@ -15,11 +21,13 @@ sed -i 's/auth-enabled = false/auth-enabled = true/' influxdb_test_config.toml
 docker build --force-rm=true -t alidron/influxdb -f Dockerfile-influxdb-test .
 docker run -d --name influx-test -p 8083:8083 -p 8086:8086 alidron/influxdb
 
+DB_IP=`docker inspect influx-test | awk '/"IPAddress"/ {print $2; exit;}' | awk -F'"' '{print $2}'`
+
 RET=1
 while [[ RET -ne 0 ]]; do
     echo "=> Waiting for confirmation of InfluxDB service startup ..."
     sleep 0.25
-    curl -k http://localhost:8086/ping 2> /dev/null
+    curl -k "http://$DB_IP:8086/ping" 2> /dev/null
     RET=$?
 done
 
