@@ -6,7 +6,7 @@ then
     apt-get install -y --no-install-recommends curl
 fi
 
-if [ `docker ps -f "name=influx-test" | wc -l` -gt 1 ]
+if [ `docker ps -a -f "name=influx-test" | wc -l` -gt 1 ]
 then
     docker stop -t 0 influx-test
     docker rm influx-test
