@@ -5,7 +5,7 @@ rpi_registry = neuron.local:6667
 
 container_name = al-arch-influx
 
-run_args = --net=alidron -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=8086 -v $(CURDIR):/workspace -v $(CURDIR)/buffer:/data # --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac
+run_alidron_prod_args = --net=alidron -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=8966 -v $(CURDIR):/workspace -v $(CURDIR)/buffer:/data # --link influxdb-alidron:db -v /media/nas/Homes/Axel/Development/Alidron/ZWave/axel/alidron-isac:/usr/src/alidron-isac
 run_alidron_test_args = --net=alidron-test -e DB_PORT_8086_TCP_ADDR=192.168.1.5 -e DB_PORT_8086_TCP_PORT=9966 -v $(CURDIR):/workspace -v $(CURDIR)/buffer-alidron-test:/data
 exec_args = python alidron_archiver.py
 
@@ -40,23 +40,31 @@ pull-rpi:
 	docker tag $(rpi_registry)/$(rpi_image_name) $(rpi_image_name)
 
 run-bash:
-	docker run -it --rm --name=$(container_name) $(run_args) $(image_name) bash
+	docker run -it --rm --name=$(container_name) $(run_alidron_test_args) $(image_name) bash
 
 run-bash-rpi:
-	docker run -it --rm --name=$(container_name) $(run_args) $(rpi_image_name) bash
+	docker run -it --rm --name=$(container_name) $(run_alidron_test_args) $(rpi_image_name) bash
 
-run:
-	docker run -d --name=$(container_name) $(run_args) $(image_name) $(exec_args)
+run-alidron-prod:
+	docker run -d --name=$(container_name)-prod $(run_alidron_prod_args) $(image_name) $(exec_args) config_alidron-prod.yaml
 
 run-alidron-test:
-	docker run -d --name=$(container_name) $(run_alidron_test_args) $(image_name) $(exec_args) config_alidron-test.yaml
+	docker run -d --name=$(container_name)-test $(run_alidron_test_args) $(image_name) $(exec_args) config_alidron-test.yaml
 
-run-rpi:
-	docker run -d --name=$(container_name) $(run_args) $(rpi_image_name) $(exec_args)
+run-rpi-alidron-prod:
+	docker run -d --name=$(container_name) $(run_alidron_prod_args) $(rpi_image_name) $(exec_args) config_alidron-prod.yaml
 
-stop:
-	docker stop -t 0 $(container_name)
-	docker rm $(container_name)
+stop-prod:
+	docker stop -t 0 $(container_name)-prod
+	docker rm $(container_name)-prod
 
-logs:
-	docker logs -f $(container_name)
+logs-prod:
+	docker logs -f $(container_name)-prod
+
+stop-test:
+	docker stop -t 0 $(container_name)-test
+	docker rm $(container_name)-test
+
+logs-test:
+	docker logs -f $(container_name)-test
+

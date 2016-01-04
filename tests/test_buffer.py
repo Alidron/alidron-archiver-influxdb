@@ -44,7 +44,7 @@ def test_buffer_on_db_deleted(config, root_client, clean_db, one_node):
         for uri, points in stored_values.items():
             assert uri == iv.uri
             for point in points:
-                got_values.append(point['value'])
+                got_values.append(point['value_int'])
 
         expected_values = [i for i in range(base+10, base+40, 10)]
         assert got_values == expected_values

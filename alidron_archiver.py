@@ -71,7 +71,7 @@ class InfluxDBArchivedValue(ArchivedValue):
                     if k.startswith('d_'):
                         dynamic_tags[k[2:]] = v
 
-                data.append((point['value'], ts_float, dynamic_tags))
+                data.append((InfluxDBArchiver._type_from_db_to_py(point), ts_float, dynamic_tags))
 
         return data
 
@@ -84,6 +84,16 @@ class InfluxDBArchiver(object):
             return '{scheme}://{username}@{hostname}:{port}/{db}'.format(**kwargs)
         else:
             return '{scheme}://{username}@{hostname}:{port}'.format(**kwargs)
+
+    _type_list_py_db = [
+        (bool, 'boolean'),
+        (str, 'string'),
+        (unicode, 'string'),
+        (int, 'int'),
+        (float, 'real'),
+    ]
+    _types_from_py_to_db = dict(_type_list_py_db)
+    _types_from_db_to_py = dict([(db, py) for py, db in _type_list_py_db])
 
     def __init__(self, config):
         logger.info('Starting')
@@ -109,6 +119,7 @@ class InfluxDBArchiver(object):
                     self._create_db()
                 else:
                     raise
+        logger.info('Connected to DB with %s', dsn)
 
         self.isac_node = IsacNode('alidron-archiver-influxdb')
         green.signal(signal.SIGTERM, partial(self._sigterm_handler))
@@ -116,7 +127,9 @@ class InfluxDBArchiver(object):
 
         self.signals = {}
 
-        raw_data = self._client.query('SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1')
+        query = 'SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1'
+        logger.debug('Doing query: %s', query)
+        raw_data = self._client.query(query)
         logger.debug('Raw data: %s', pf(raw_data.items()))
         metadata = {}
 
@@ -133,17 +146,26 @@ class InfluxDBArchiver(object):
                 for key, value in raw_metadata.items():
                     if key.startswith('d_') or key.startswith('s_') or key in ['time', 'scheme']:
                         continue
-                    if (key == 'value') and (value is None):
+                    if (key.startswith('value')) and (value is None):
                         continue
-
-                    metadata[uri_str][key] = value
+                        
+                    if key.startswith('json_'):
+                        if value is None:
+                            metadata[uri_str][key[len('json_'):]] = None
+                        else:
+                            try:
+                                metadata[uri_str][key[len('json_'):]] = json.loads(str(value))
+                            except ValueError:
+                                logger.error('Wrong JSON for %s at key %s: %s', uri_str, key, str(value))
+                                continue
+                    else:
+                        metadata[uri_str][key] = value
 
                 logger.debug('Read metadata for %s: %s', uri_str, metadata[uri_str])
 
         for meas_tags, data in raw_data.items():
             uri_str, uri = _make_uri(*meas_tags)
             if uri.scheme == 'metadata':
-                logger.warning('Discarding metadata: %s, %s', uri_str, data.next())
                 continue
 
             last_point = data.next()
@@ -166,15 +188,20 @@ class InfluxDBArchiver(object):
 
             self.signals[uri_str] = InfluxDBArchivedValue(
                 self.isac_node, uri_str,
-                initial_value=(last_point['value'], ts),
+                initial_value=(self._type_from_db_to_py(last_point), ts),
                 static_tags=static_tags, dynamic_tags=dynamic_tags,
-                observers=Observable([self._notify]), influxdb_client=self._client,
+                observers=Observable([self._notify]),
                 metadata=metadata.get(uri_str, None),
                 survey_last_value=False,
-                survey_static_tags=False
+                survey_static_tags=False,
+                influxdb_client=self._client,
             )
             self.signals[uri_str].metadata_observers += self._notify_metadata
-            self.signals[uri_str].survey_metadata()
+            green.spawn(self.signals[uri_str].survey_metadata)
+            
+            logger.warning('Discovered %s', uri_str)
+            
+        logger.warning('Done loading existing signals')
 
         self.isac_node.register_isac_value_entering(self._new_signal)
         signal_uris = self.isac_node.survey_value_uri('.*')
@@ -211,6 +238,29 @@ class InfluxDBArchiver(object):
     def _prefix_keys(d, prefix):
         return {prefix+k: v for k, v in d.items()}
 
+    @staticmethod
+    def _type_from_py_to_db(value):
+        if type(value) in InfluxDBArchiver._types_from_py_to_db.keys():
+            field_name = 'value_' + InfluxDBArchiver._types_from_py_to_db[type(value)]
+        else:
+            field_name = 'value_json'
+            value = json.dumps(value)
+
+        return field_name, value
+
+    @staticmethod
+    def _type_from_db_to_py(fields):
+        for field_name, value in fields.items():
+            if not field_name.startswith('value_'):
+                continue
+            elif value is None:
+                continue
+            else:
+                if field_name == 'value_json':
+                    return json.loads(value)
+                else:
+                    return InfluxDBArchiver._types_from_db_to_py[field_name[len('value_'):]](value)
+
     def _notify(self, iv, value, ts, dynamic_tags):
         # We are already in a green thread here
         uri = urisplit(iv.uri)
@@ -222,10 +272,12 @@ class InfluxDBArchiver(object):
             tags['authority'] = uri.authority
             tags['path'] = uri.path
 
+            field_name, value = self._type_from_py_to_db(value)
+
             return {
                 'measurement': uri.scheme,
                 'time': ts,
-                'fields': {'value': value},
+                'fields': {field_name: value},
                 'tags': tags,
             }
 
@@ -272,10 +324,17 @@ class InfluxDBArchiver(object):
         tags['authority'] = uri.authority
         tags['path'] = uri.path
         tags['scheme'] = uri.scheme
+        
+        metadata_to_write = {}
+        for k, v in metadata.items():
+            if type(v) not in InfluxDBArchiver._types_from_py_to_db.keys():
+                metadata_to_write['json_' + k] = json.dumps(v)
+            else:
+                metadata_to_write[k] = v
 
         data = [{
             'measurement': 'metadata',
-            'fields': metadata,
+            'fields': metadata_to_write,
             'tags': tags
         }]
         logger.info('Writing metadata for %s: %s', uri, metadata)
@@ -356,7 +415,7 @@ def _read_config_file(other_path=None):
     return config
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARNING)
 
     config = _read_config_file()
 

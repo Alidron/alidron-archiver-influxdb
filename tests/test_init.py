@@ -41,7 +41,7 @@ def test_detect_all_iv(config, root_client, clean_db, two_nodes):
 
             else:
                 assert uri in ivs
-                assert points[0]['value'] == ivs[uri].value
+                assert points[0]['value_int'] == ivs[uri].value
                 compare_time(points[0]['time'], ivs[uri].timestamp)
                 assert points[0]['s_nb'] == ivs[uri].static_tags['nb']
                 assert points[0]['d_peer_name'] == ivs[uri].isac_node.transport.name()
@@ -53,7 +53,7 @@ def test_detect_all_iv(config, root_client, clean_db, two_nodes):
     finally:
         archiver.shutdown()
 
-def test_publish_all_last_values_tags_metadata(config, clean_db, one_node):
+def test_publish_all_last_values_tags_metadata(config, one_node):
     '''
     Full alive->dead->alive cycle:
     - Create a node
@@ -68,7 +68,7 @@ def test_publish_all_last_values_tags_metadata(config, clean_db, one_node):
     '''
     ivs = {}
     def _make_iv(uri):
-        iv = IsacValue(one_node, uri, static_tags={'nb': uri[-1]}, metadata={'leaf': uri[-3:]}, survey_last_value=False, survey_static_tags=False)
+        iv = IsacValue(one_node, uri, static_tags={'nb': uri[-1]}, metadata={'leaf': uri[-3:], 'list': list('123456789'), 'dict': dict(zip(list('ABCDEFGHI'), list('123456789')))}, survey_last_value=False, survey_static_tags=False)
         iv.value = randint(0, 100)
         ivs[uri] = iv.value, iv.timestamp, iv.tags, iv.static_tags, iv.metadata
     _make_iv('test://test_init/test_publish_all_last_values_tags_metadata/iv1')

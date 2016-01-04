@@ -21,7 +21,7 @@ def test_update_value_tags(config, root_client, clean_db, one_node):
         stored_values = read_data(config, root_client, 'SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1')
         for uri, points in stored_values.items():
             assert uri == iv.uri
-            assert points[0]['value'] == iv.value
+            assert points[0]['value_int'] == iv.value
             compare_time(points[0]['time'], iv.timestamp)
             assert points[0]['d_peer_name'] == iv.isac_node.transport.name()
             assert points[0]['d_peer_uuid'] == str(iv.isac_node.transport.uuid())
@@ -33,7 +33,7 @@ def test_update_value_tags(config, root_client, clean_db, one_node):
         stored_values = read_data(config, root_client, 'SELECT * FROM /.*/ GROUP BY authority, path ORDER BY time DESC LIMIT 1')
         for uri, points in stored_values.items():
             assert uri == iv.uri
-            assert points[0]['value'] == iv.value
+            assert points[0]['value_int'] == iv.value
             compare_time(points[0]['time'], iv.timestamp)
             assert points[0]['d_test'] == iv.tags['test']
             assert points[0]['d_peer_name'] == iv.isac_node.transport.name()
@@ -87,7 +87,7 @@ def test_update_new_value(config, root_client, clean_db, one_node):
 
             else:
                 assert uri == iv.uri
-                assert points[0]['value'] == iv.value
+                assert points[0]['value_int'] == iv.value
                 compare_time(points[0]['time'], iv.timestamp)
                 assert points[0]['s_static'] == iv.static_tags['static']
                 assert points[0]['d_peer_name'] == iv.isac_node.transport.name()
