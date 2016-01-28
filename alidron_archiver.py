@@ -14,8 +14,6 @@ from pprint import pprint as pp, pformat as pf
 from requests.exceptions import ConnectionError
 from uritools import urisplit, uricompose
 
-#from influxdb.influxdb08 import InfluxDBClient, SeriesHelper
-#from influxdb.influxdb08.client import InfluxDBClientError
 from influxdb import InfluxDBClient
 from influxdb.client import InfluxDBClientError
 
@@ -148,7 +146,7 @@ class InfluxDBArchiver(object):
                         continue
                     if (key.startswith('value')) and (value is None):
                         continue
-                        
+
                     if key.startswith('json_'):
                         if value is None:
                             metadata[uri_str][key[len('json_'):]] = None
@@ -198,9 +196,9 @@ class InfluxDBArchiver(object):
             )
             self.signals[uri_str].metadata_observers += self._notify_metadata
             green.spawn(self.signals[uri_str].survey_metadata)
-            
+
             logger.warning('Discovered %s', uri_str)
-            
+
         logger.warning('Done loading existing signals')
 
         self.isac_node.register_isac_value_entering(self._new_signal)
@@ -324,7 +322,7 @@ class InfluxDBArchiver(object):
         tags['authority'] = uri.authority
         tags['path'] = uri.path
         tags['scheme'] = uri.scheme
-        
+
         metadata_to_write = {}
         for k, v in metadata.items():
             if type(v) not in InfluxDBArchiver._types_from_py_to_db.keys():

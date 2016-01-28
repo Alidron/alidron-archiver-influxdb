@@ -1,3 +1,8 @@
 .dockerignore
+.gitlab-ci.yml
 Dockerfile
+Dockerfile-influxdb-test
+Dockerfile-rpi
 Makefile
+README.md
+CONTRIBUTING.md
