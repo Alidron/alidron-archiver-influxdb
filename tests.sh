@@ -18,8 +18,8 @@ then
     docker rm influx-test
 fi
 
-docker pull tutum/influxdb:0.9
-docker run --rm tutum/influxdb:0.9 cat /etc/influxdb/influxdb.conf > influxdb_test_config.toml
+docker pull tutum/influxdb:0.10
+docker run --rm tutum/influxdb:0.10 cat /etc/influxdb/influxdb.conf > influxdb_test_config.toml
 sed -i 's/# engine ="bz1"/engine = "tsm1"/' influxdb_test_config.toml
 sed -i 's/auth-enabled = false/auth-enabled = true/' influxdb_test_config.toml
 # Can't use a volume to make the config file available because it fails when running the test within a docker container (ie. in the Gitlab CI runner container)...
